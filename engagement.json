@@ -1,0 +1,82 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "category": "target",
+      "title": "10.10.10.5  (acme-web01)",
+      "notes": "",
+      "x": -90.0,
+      "y": -200.0
+    },
+    {
+      "id": 2,
+      "category": "recon",
+      "title": "Nmap full TCP",
+      "notes": "nmap -p- -sCV",
+      "x": -351.03881856540085,
+      "y": -278.3658227848101
+    },
+    {
+      "id": 3,
+      "category": "enum",
+      "title": "Port 80 \u2014 Apache 2.4.49",
+      "notes": "path traversal?\n\n\n\n\nWhat else ?",
+      "x": 221.3135021097046,
+      "y": -331.790717299578
+    },
+    {
+      "id": 4,
+      "category": "vuln",
+      "title": "CVE-2021-41773",
+      "notes": "Apache path traversal RCE",
+      "x": 501.8413502109705,
+      "y": -133.93586497890297
+    },
+    {
+      "id": 10,
+      "category": "enum",
+      "title": "C# Code interpreter",
+      "notes": "",
+      "x": -325.3590717299578,
+      "y": 1.98143459915606
+    },
+    {
+      "id": 11,
+      "category": "note",
+      "title": "Note",
+      "notes": "",
+      "x": 265.30843881856543,
+      "y": 184.87848101265826
+    }
+  ],
+  "edges": [
+    {
+      "a": 1,
+      "b": 2
+    },
+    {
+      "a": 1,
+      "b": 3
+    },
+    {
+      "a": 3,
+      "b": 4
+    },
+    {
+      "a": 10,
+      "b": 11
+    },
+    {
+      "a": 1,
+      "b": 10
+    },
+    {
+      "a": 4,
+      "b": 10
+    },
+    {
+      "a": 1,
+      "b": 11
+    }
+  ]
+}
