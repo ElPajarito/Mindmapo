@@ -7,12 +7,13 @@ Run:  python3 main.py
 import json
 import sys
 
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, Signal
 from PySide6.QtGui import QAction, QKeySequence, QFont, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QComboBox, QLineEdit, QPlainTextEdit,
     QFileDialog, QToolBar, QSizePolicy, QGraphicsView, QMenu, QToolButton,
+    QDockWidget,
 )
 
 from categories import CATEGORIES, get_category, THEME
@@ -49,6 +50,18 @@ def style_sheet():
         letter-spacing: 1px;
         padding: 6px 2px 2px 2px;
     }}
+    #PaletteToggle {{
+        background: {t['panel_alt']};
+        border: 1px solid {t['border']};
+        border-radius: 11px;
+        padding: 9px 10px;
+        text-align: left;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        color: {t['text_dim']};
+    }}
+    #PaletteToggle:hover {{ background: #243056; color: {t['text']}; }}
     QPushButton.cat {{
         text-align: left;
         padding: 9px 12px;
@@ -147,6 +160,34 @@ def style_sheet():
         border-radius: 11px; padding: 9px 12px; font-weight: 700; color: #ff9bb5;
     }}
     QPushButton#danger:hover {{ background: #54192e; }}
+    QPushButton#layoutBtn {{
+        background: {t['panel_alt']}; border: 1px solid {t['border']};
+        border-radius: 8px; min-width: 26px; padding: 4px 7px;
+        font-size: 14px; font-weight: 700; color: {t['text']};
+    }}
+    QPushButton#layoutBtn:hover {{ background: #243056; color: {t['accent']}; }}
+    QDockWidget {{
+        color: {t['text']};
+        font-weight: 800;
+        titlebar-close-icon: none;
+        titlebar-normal-icon: none;
+    }}
+    QDockWidget::title {{
+        background: {t['panel']};
+        padding: 8px 12px;
+        border: 1px solid {t['border']};
+        border-top-left-radius: 12px;
+        border-top-right-radius: 12px;
+        text-align: left;
+    }}
+    QDockWidget::close-button, QDockWidget::float-button {{
+        background: {t['panel_alt']};
+        border: 1px solid {t['border']};
+        border-radius: 6px;
+        padding: 2px;
+    }}
+    QDockWidget::close-button:hover {{ background: #54192e; }}
+    QDockWidget::float-button:hover {{ background: #243056; }}
     QLineEdit, QPlainTextEdit, QComboBox {{
         background: {t['panel_alt']};
         border: 1px solid {t['border']};
@@ -185,47 +226,74 @@ def style_sheet():
 
 
 class Inspector(QFrame):
-    """Right panel: edit the selected node's title / category / notes."""
+    """Edit panel for the selected node.
+
+    Re-flows between a vertical (docked left/right) and horizontal (docked
+    top/bottom) arrangement, and can be torn off into a floating window.
+    """
+
+    layoutVertical = Signal()
+    layoutHorizontal = Signal()
+    layoutFloat = Signal()
 
     def __init__(self, scene, parent=None):
         super().__init__(parent)
         self.setObjectName("Inspector")
         self.scene = scene
         self.node = None
-        self.setFixedWidth(280)
+        self.vertical = True
+        self.setMinimumWidth(150)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(8)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(10)
 
-        lay.addWidget(self._label("INSPECTOR", "SectionLabel"))
+        # ---- layout-mode controls (always at the top) ----
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
+        controls.addWidget(self._label("LAYOUT", "SectionLabel"))
+        controls.addStretch(1)
+        for text, tip, sig in (
+            ("⬍", "Vertical (dock left/right)", self.layoutVertical),
+            ("⬌", "Horizontal (dock top/bottom)", self.layoutHorizontal),
+            ("⧉", "Float as window", self.layoutFloat),
+        ):
+            b = QPushButton(text)
+            b.setObjectName("layoutBtn")
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(sig.emit)
+            controls.addWidget(b)
+        outer.addLayout(controls)
+
+        # ---- fields (their arrangement is swapped on orientation change) ----
         self.title_lbl = QLabel("No node selected")
         self.title_lbl.setObjectName("PanelTitle")
         self.title_lbl.setWordWrap(True)
-        lay.addWidget(self.title_lbl)
+        self.title_lbl.setMaximumWidth(360)
 
-        lay.addWidget(self._label("TITLE", "SectionLabel"))
         self.title_edit = QLineEdit()
         self.title_edit.textEdited.connect(self._on_title)
-        lay.addWidget(self.title_edit)
+        self.g_title = self._group("TITLE", self.title_edit)
 
-        lay.addWidget(self._label("CATEGORY", "SectionLabel"))
         self.cat_combo = QComboBox()
         for key, cat in CATEGORIES.items():
             self.cat_combo.addItem(f"{cat.emoji}  {cat.label}", key)
         self.cat_combo.currentIndexChanged.connect(self._on_category)
-        lay.addWidget(self.cat_combo)
+        self.g_cat = self._group("CATEGORY", self.cat_combo)
 
-        lay.addWidget(self._label("INTEL / NOTES", "SectionLabel"))
         self.notes_edit = QPlainTextEdit()
         self.notes_edit.setPlaceholderText("Creds, ports, payloads, observations…")
         self.notes_edit.textChanged.connect(self._on_notes)
-        lay.addWidget(self.notes_edit, 1)
+        self.g_notes = self._group("INTEL / NOTES", self.notes_edit)
 
         self.del_btn = QPushButton("\U0001F5D1  Delete node")
         self.del_btn.setObjectName("danger")
         self.del_btn.clicked.connect(self._delete)
-        lay.addWidget(self.del_btn)
+
+        self.fields = QWidget()
+        outer.addWidget(self.fields, 1)
+        self.set_orientation(True)
 
         self._busy = False
         self.set_node(None)
@@ -234,6 +302,39 @@ class Inspector(QFrame):
         l = QLabel(text)
         l.setObjectName(obj)
         return l
+
+    def _group(self, label, widget):
+        g = QWidget()
+        gl = QVBoxLayout(g)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(4)
+        gl.addWidget(self._label(label, "SectionLabel"))
+        gl.addWidget(widget, 1)
+        return g
+
+    def set_orientation(self, vertical):
+        """Re-pack the field widgets into a vertical or horizontal box."""
+        self.vertical = vertical
+        units = (self.title_lbl, self.g_title, self.g_cat, self.g_notes, self.del_btn)
+
+        old = self.fields.layout()
+        if old is not None:
+            while old.count():
+                w = old.takeAt(0).widget()
+                if w is not None:
+                    w.setParent(None)
+            QWidget().setLayout(old)        # dispose the now-empty old layout
+
+        new = QVBoxLayout() if vertical else QHBoxLayout()
+        new.setContentsMargins(0, 0, 0, 0)
+        new.setSpacing(10)
+        for w in units:
+            new.addWidget(w, 1 if w is self.g_notes else 0)
+        if not vertical:
+            new.setAlignment(self.del_btn, Qt.AlignTop)
+        self.fields.setLayout(new)
+        for w in units:
+            w.show()
 
     def set_node(self, node):
         self._busy = True
@@ -282,17 +383,31 @@ class Inspector(QFrame):
 class Sidebar(QFrame):
     """Left palette of pentest categories + quick actions."""
 
+    EXPANDED_W = 220
+    COLLAPSED_W = 48
+
     def __init__(self, on_add, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self.setFixedWidth(220)
+        self.setFixedWidth(self.EXPANDED_W)
         self.on_add = on_add
+        self.expanded = True
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 16, 14, 16)
-        outer.setSpacing(6)
+        outer.setContentsMargins(8, 10, 8, 10)
+        outer.setSpacing(8)
 
-        outer.addWidget(self._section("ADD A NODE"))
+        self.toggle_btn = QPushButton()
+        self.toggle_btn.setObjectName("PaletteToggle")
+        self.toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_btn.clicked.connect(self.toggle)
+        outer.addWidget(self.toggle_btn)
+
+        # Everything below the header hides when collapsed.
+        self.body = QWidget()
+        body_lay = QVBoxLayout(self.body)
+        body_lay.setContentsMargins(6, 0, 6, 0)
+        body_lay.setSpacing(6)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -304,12 +419,33 @@ class Sidebar(QFrame):
             col.addWidget(self._cat_button(key, cat))
         col.addStretch(1)
         scroll.setWidget(holder)
-        outer.addWidget(scroll, 1)
+        body_lay.addWidget(scroll, 1)
 
         hint = QLabel("Tip: right-click a node to add a child.\nDrag to move • Wheel to zoom • Alt-drag to pan")
         hint.setObjectName("SectionLabel")
         hint.setWordWrap(True)
-        outer.addWidget(hint)
+        body_lay.addWidget(hint)
+
+        outer.addWidget(self.body, 1)
+        self._apply_state()
+
+    def toggle(self):
+        self.expanded = not self.expanded
+        self._apply_state()
+
+    def _apply_state(self):
+        self.body.setVisible(self.expanded)
+        self.setFixedWidth(self.EXPANDED_W if self.expanded else self.COLLAPSED_W)
+        if self.expanded:
+            self.toggle_btn.setText("ADD A NODE      ▾")
+            self.toggle_btn.setToolTip("Collapse palette")
+            self.toggle_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        else:
+            # Make the whole slim strip one big clickable button so it's
+            # impossible to miss when re-expanding.
+            self.toggle_btn.setText("➕\n▸")
+            self.toggle_btn.setToolTip("Expand palette")
+            self.toggle_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def _section(self, text):
         l = QLabel(text)
@@ -343,7 +479,6 @@ class MainWindow(QMainWindow):
         self.view.setObjectName("Canvas")
 
         self.sidebar = Sidebar(self.add_from_palette)
-        self.inspector = Inspector(self.scene)
 
         central = QWidget()
         h = QHBoxLayout(central)
@@ -351,8 +486,28 @@ class MainWindow(QMainWindow):
         h.setSpacing(12)
         h.addWidget(self.sidebar)
         h.addWidget(self.view, 1)
-        h.addWidget(self.inspector)
         self.setCentralWidget(central)
+
+        # Inspector lives in a dock so it can be resized, re-docked
+        # (vertical / horizontal) or torn off into a floating window.
+        self.inspector = Inspector(self.scene)
+        self.inspector_dock = QDockWidget("  \U0001F50D  Inspector", self)
+        self.inspector_dock.setObjectName("InspectorDock")
+        self.inspector_dock.setWidget(self.inspector)
+        self.inspector_dock.setAllowedAreas(
+            Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea
+            | Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        self.inspector_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetClosable)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.inspector_dock)
+        self.resizeDocks([self.inspector_dock], [300], Qt.Horizontal)
+        self.inspector_dock.dockLocationChanged.connect(self._on_inspector_docked)
+        self.inspector.layoutVertical.connect(
+            lambda: self._dock_inspector(Qt.RightDockWidgetArea))
+        self.inspector.layoutHorizontal.connect(
+            lambda: self._dock_inspector(Qt.BottomDockWidgetArea))
+        self.inspector.layoutFloat.connect(self._float_inspector)
 
         self._matches = []
         self._match_idx = -1
@@ -408,6 +563,12 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._menu_btn("\U0001F4E4  Export", [
             ("\U0001F5BC  Export PNG…", self.export_png),
             ("\U0001F4DD  Export Markdown…", self.export_markdown),
+        ]))
+        tb.addWidget(self._menu_btn("\U0001F50D  Inspector", [
+            ("\U0001F441  Show / hide", self.toggle_inspector),
+            ("⬍  Vertical (right)", lambda: self._dock_inspector(Qt.RightDockWidgetArea)),
+            ("⬌  Horizontal (bottom)", lambda: self._dock_inspector(Qt.BottomDockWidgetArea)),
+            ("⧉  Float window", self._float_inspector),
         ]))
 
         self.link_btn = self._tbtn("\U0001F517  Link mode", self.toggle_link, checkable=True)
@@ -494,6 +655,31 @@ class MainWindow(QMainWindow):
         self.scene.swimlane_layout()
         self.view.fit_all()
         self.statusBar().showMessage("Swimlane layout applied — one lane per kill-chain phase.")
+
+    # ----- inspector dock
+    def _dock_inspector(self, area):
+        self.inspector_dock.setFloating(False)
+        self.addDockWidget(area, self.inspector_dock)
+        self.inspector_dock.show()
+        vertical = area in (Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea)
+        self.inspector.set_orientation(vertical)
+        if vertical:
+            self.resizeDocks([self.inspector_dock], [300], Qt.Horizontal)
+        else:
+            self.resizeDocks([self.inspector_dock], [230], Qt.Vertical)
+
+    def _float_inspector(self):
+        self.inspector_dock.setFloating(True)
+        self.inspector.set_orientation(True)
+        self.inspector_dock.resize(340, 440)
+        self.inspector_dock.show()
+
+    def _on_inspector_docked(self, area):
+        vertical = area in (Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea)
+        self.inspector.set_orientation(vertical)
+
+    def toggle_inspector(self):
+        self.inspector_dock.setVisible(not self.inspector_dock.isVisible())
 
     # ----- search
     def on_search(self, text):
