@@ -414,13 +414,16 @@ class Inspector(QFrame):
 class Sidebar(QFrame):
     """Left palette of pentest categories + quick actions."""
 
+    toggled = Signal(bool)      # emitted with the new expanded state
+
     EXPANDED_W = 220
     COLLAPSED_W = 48
+    MIN_W = 170
 
     def __init__(self, on_add, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self.setFixedWidth(self.EXPANDED_W)
+        self.setMinimumWidth(self.MIN_W)
         self.on_add = on_add
         self.expanded = True
 
@@ -463,17 +466,21 @@ class Sidebar(QFrame):
     def toggle(self):
         self.expanded = not self.expanded
         self._apply_state()
+        self.toggled.emit(self.expanded)
 
     def _apply_state(self):
         self.body.setVisible(self.expanded)
-        self.setFixedWidth(self.EXPANDED_W if self.expanded else self.COLLAPSED_W)
         if self.expanded:
-            self.toggle_btn.setText("ADD A NODE      ▾")
+            # Free the width constraints so the dock can be dragged to resize.
+            self.setMinimumWidth(self.MIN_W)
+            self.setMaximumWidth(16777215)
+            self.toggle_btn.setText("▾   Collapse palette")
             self.toggle_btn.setToolTip("Collapse palette")
             self.toggle_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         else:
-            # Make the whole slim strip one big clickable button so it's
+            # Lock to a slim strip that's one big clickable button so it's
             # impossible to miss when re-expanding.
+            self.setFixedWidth(self.COLLAPSED_W)
             self.toggle_btn.setText("➕\n▸")
             self.toggle_btn.setToolTip("Expand palette")
             self.toggle_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -649,19 +656,26 @@ class MainWindow(QMainWindow):
         self.tabs.closeRequested.connect(self.close_map)
         self.tabs.renameRequested.connect(self.rename_map)
 
-        central = QWidget()
-        h = QHBoxLayout(central)
-        h.setContentsMargins(12, 12, 12, 12)
-        h.setSpacing(12)
-        h.addWidget(self.sidebar)
         right = QWidget()
         col = QVBoxLayout(right)
-        col.setContentsMargins(0, 0, 0, 0)
+        col.setContentsMargins(12, 12, 12, 12)
         col.setSpacing(10)
         col.addWidget(self.tabs)
         col.addWidget(self.view, 1)
-        h.addWidget(right, 1)
-        self.setCentralWidget(central)
+        self.setCentralWidget(right)
+
+        # Palette lives in a dock so it can be dragged to resize (and floated),
+        # just like the inspector. Its own toggle still collapses it to a strip.
+        self.sidebar_dock = QDockWidget("  ➕  Add node", self)
+        self.sidebar_dock.setObjectName("SidebarDock")
+        self.sidebar_dock.setWidget(self.sidebar)
+        self.sidebar_dock.setAllowedAreas(
+            Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.sidebar_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.sidebar_dock)
+        self.resizeDocks([self.sidebar_dock], [Sidebar.EXPANDED_W], Qt.Horizontal)
+        self.sidebar.toggled.connect(self._on_sidebar_toggled)
 
         # Each entry: {"name": str, "state": dict|None}. The active tab's data
         # lives in the live scene; "state" holds the serialized copy otherwise.
@@ -907,6 +921,13 @@ class MainWindow(QMainWindow):
         if ok and name.strip():
             self.maps[index]["name"] = name.strip()
             self._refresh_tabs()
+
+    # ----- sidebar dock
+    def _on_sidebar_toggled(self, expanded):
+        # Collapsing locks the frame to 48px (which shrinks the dock); on expand
+        # give the dock a sensible width back so it's resizable again.
+        if expanded:
+            self.resizeDocks([self.sidebar_dock], [Sidebar.EXPANDED_W], Qt.Horizontal)
 
     # ----- inspector dock
     def _dock_inspector(self, area):
