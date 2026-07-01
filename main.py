@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QComboBox, QLineEdit, QPlainTextEdit,
     QFileDialog, QToolBar, QSizePolicy, QGraphicsView, QMenu, QToolButton,
-    QDockWidget,
+    QDockWidget, QInputDialog,
 )
 
 from categories import CATEGORIES, get_category, THEME
@@ -188,6 +188,37 @@ def style_sheet():
     }}
     QDockWidget::close-button:hover {{ background: #54192e; }}
     QDockWidget::float-button:hover {{ background: #243056; }}
+    #MapTabs {{
+        background: {t['panel']};
+        border: 1px solid {t['border']};
+        border-radius: 14px;
+    }}
+    #TabScroll {{ background: transparent; border: none; }}
+    #TabPill {{
+        background: {t['panel_alt']};
+        border: 1px solid {t['border']};
+        border-radius: 11px;
+    }}
+    #TabPill:hover {{ border: 1px solid {t['accent']}; }}
+    #TabPill[active="true"] {{
+        background: {t['accent']};
+        border: 1px solid {t['accent']};
+    }}
+    #TabLabel {{ color: {t['text']}; font-weight: 700; background: transparent; }}
+    #TabPill[active="true"] #TabLabel {{ color: #221a00; font-weight: 800; }}
+    #TabClose {{
+        background: transparent; border: none; color: {t['text_dim']};
+        font-size: 12px; font-weight: 800; padding: 0 2px;
+    }}
+    #TabClose:hover {{ color: #ff9bb5; }}
+    #TabPill[active="true"] #TabClose {{ color: #6b4a00; }}
+    #TabPill[active="true"] #TabClose:hover {{ color: #7a1224; }}
+    #TabAdd, #TabCollapse {{
+        background: {t['panel_alt']}; border: 1px solid {t['border']};
+        border-radius: 11px; padding: 8px 12px; font-weight: 700; color: {t['text']};
+    }}
+    #TabAdd:hover, #TabCollapse:hover {{ background: #243056; color: {t['accent']}; }}
+    #TabMini {{ color: {t['text_dim']}; font-weight: 800; padding: 0 8px; }}
     QLineEdit, QPlainTextEdit, QComboBox {{
         background: {t['panel_alt']};
         border: 1px solid {t['border']};
@@ -467,6 +498,137 @@ class Sidebar(QFrame):
         return btn
 
 
+class TabPill(QFrame):
+    """A single map tab: click to switch, double-click to rename, ✕ to close."""
+
+    clicked = Signal()
+    doubleClicked = Signal()
+    closeClicked = Signal()
+
+    def __init__(self, text, active=False, closable=True, parent=None):
+        super().__init__(parent)
+        self.setObjectName("TabPill")
+        self.setProperty("active", "true" if active else "false")
+        self.setCursor(Qt.PointingHandCursor)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 6, 8, 6)
+        lay.setSpacing(6)
+
+        self.lbl = QLabel(text)
+        self.lbl.setObjectName("TabLabel")
+        self.lbl.setToolTip("Click to open · double-click to rename")
+        lay.addWidget(self.lbl)
+
+        if closable:
+            x = QToolButton()
+            x.setObjectName("TabClose")
+            x.setText("✕")
+            x.setCursor(Qt.PointingHandCursor)
+            x.setToolTip("Close map")
+            x.clicked.connect(lambda: self.closeClicked.emit())
+            lay.addWidget(x)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(e)
+
+
+class MapTabs(QFrame):
+    """Collapsible strip of tabs — one mind map per tab for the same asset."""
+
+    switchRequested = Signal(int)
+    addRequested = Signal()
+    closeRequested = Signal(int)
+    renameRequested = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("MapTabs")
+        self.collapsed = False
+        self._names = []
+        self._active = 0
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(8)
+
+        self.collapse_btn = QToolButton()
+        self.collapse_btn.setObjectName("TabCollapse")
+        self.collapse_btn.setCursor(Qt.PointingHandCursor)
+        self.collapse_btn.clicked.connect(self._toggle_collapsed)
+        lay.addWidget(self.collapse_btn)
+
+        # Compact summary shown only while collapsed.
+        self.mini = QLabel("")
+        self.mini.setObjectName("TabMini")
+        self.mini.setVisible(False)
+        lay.addWidget(self.mini)
+
+        # Horizontally-scrollable row of tab pills.
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("TabScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setFixedHeight(48)
+        self.row_holder = QWidget()
+        self.row = QHBoxLayout(self.row_holder)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(6)
+        self.row.addStretch(1)
+        self.scroll.setWidget(self.row_holder)
+        lay.addWidget(self.scroll, 1)
+
+        self.add_btn = QToolButton()
+        self.add_btn.setObjectName("TabAdd")
+        self.add_btn.setText("➕  New map")
+        self.add_btn.setCursor(Qt.PointingHandCursor)
+        self.add_btn.setToolTip("Add a new mind map for this asset")
+        self.add_btn.clicked.connect(lambda: self.addRequested.emit())
+        lay.addWidget(self.add_btn)
+
+        self._update_collapse_btn()
+
+    def _toggle_collapsed(self):
+        self.collapsed = not self.collapsed
+        self.scroll.setVisible(not self.collapsed)
+        self.add_btn.setVisible(not self.collapsed)
+        self.mini.setVisible(self.collapsed)
+        self._update_collapse_btn()
+
+    def _update_collapse_btn(self):
+        self.collapse_btn.setText("\U0001F5C2 ▸" if self.collapsed else "\U0001F5C2 ▾")
+        self.collapse_btn.setToolTip("Show map tabs" if self.collapsed else "Hide map tabs")
+
+    def set_tabs(self, names, active):
+        self._names = list(names)
+        self._active = active
+        while self.row.count() > 1:                 # keep the trailing stretch
+            item = self.row.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)                   # remove immediately, not on next tick
+                w.deleteLater()
+
+        closable = len(names) > 1
+        for i, name in enumerate(names):
+            pill = TabPill(name, active=(i == active), closable=closable)
+            pill.clicked.connect(lambda idx=i: self.switchRequested.emit(idx))
+            pill.doubleClicked.connect(lambda idx=i: self.renameRequested.emit(idx))
+            pill.closeClicked.connect(lambda idx=i: self.closeRequested.emit(idx))
+            self.row.insertWidget(self.row.count() - 1, pill)
+
+        cur = names[active] if 0 <= active < len(names) else ""
+        self.mini.setText(f"\U0001F5C2  {cur}   ·   {len(names)} map(s)")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -480,13 +642,31 @@ class MainWindow(QMainWindow):
 
         self.sidebar = Sidebar(self.add_from_palette)
 
+        # Tab bar — several mind maps for the same asset.
+        self.tabs = MapTabs()
+        self.tabs.switchRequested.connect(self.switch_map)
+        self.tabs.addRequested.connect(self.add_map)
+        self.tabs.closeRequested.connect(self.close_map)
+        self.tabs.renameRequested.connect(self.rename_map)
+
         central = QWidget()
         h = QHBoxLayout(central)
         h.setContentsMargins(12, 12, 12, 12)
         h.setSpacing(12)
         h.addWidget(self.sidebar)
-        h.addWidget(self.view, 1)
+        right = QWidget()
+        col = QVBoxLayout(right)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(10)
+        col.addWidget(self.tabs)
+        col.addWidget(self.view, 1)
+        h.addWidget(right, 1)
         self.setCentralWidget(central)
+
+        # Each entry: {"name": str, "state": dict|None}. The active tab's data
+        # lives in the live scene; "state" holds the serialized copy otherwise.
+        self.maps = [{"name": "Map 1", "state": None}]
+        self.active_map = 0
 
         # Inspector lives in a dock so it can be resized, re-docked
         # (vertical / horizontal) or torn off into a floating window.
@@ -524,6 +704,7 @@ class MainWindow(QMainWindow):
         self.ideas = IdeaTracker(self.view)
 
         self._make_sample_map()
+        self._refresh_tabs()
         self.view.fit_all()
 
     def showEvent(self, event):
@@ -656,6 +837,77 @@ class MainWindow(QMainWindow):
         self.view.fit_all()
         self.statusBar().showMessage("Swimlane layout applied — one lane per kill-chain phase.")
 
+    # ----- map tabs
+    def _refresh_tabs(self):
+        self.tabs.set_tabs([m["name"] for m in self.maps], self.active_map)
+
+    def _current_state(self):
+        data = self.scene.to_dict()
+        data["ideas"] = self.ideas.to_list()
+        return data
+
+    def _capture_active(self):
+        self.maps[self.active_map]["state"] = self._current_state()
+
+    def _load_state(self, state):
+        state = state or {"nodes": [], "edges": [], "ideas": []}
+        self.scene.from_dict(state)
+        self.ideas.load(state.get("ideas", []))
+        self.inspector.set_node(None)
+
+    def _next_map_name(self):
+        n = len(self.maps) + 1
+        existing = {m["name"] for m in self.maps}
+        while f"Map {n}" in existing:
+            n += 1
+        return f"Map {n}"
+
+    def switch_map(self, index):
+        if index == self.active_map or not (0 <= index < len(self.maps)):
+            return
+        self._capture_active()
+        self.active_map = index
+        self._load_state(self.maps[index]["state"])
+        self._refresh_tabs()
+        self.view.fit_all()
+        self.statusBar().showMessage(f"Switched to “{self.maps[index]['name']}”.")
+
+    def add_map(self):
+        self._capture_active()
+        self.maps.append({"name": self._next_map_name(),
+                          "state": {"nodes": [], "edges": [], "ideas": []}})
+        self.active_map = len(self.maps) - 1
+        self._load_state(self.maps[self.active_map]["state"])
+        self._refresh_tabs()
+        self.view.fit_all()
+        self.statusBar().showMessage(f"New map “{self.maps[self.active_map]['name']}” added.")
+
+    def close_map(self, index):
+        if not (0 <= index < len(self.maps)):
+            return
+        if len(self.maps) <= 1:
+            self.statusBar().showMessage("At least one map is required.")
+            return
+        name = self.maps[index]["name"]
+        del self.maps[index]
+        if index == self.active_map:
+            self.active_map = min(index, len(self.maps) - 1)
+            self._load_state(self.maps[self.active_map]["state"])
+            self.view.fit_all()
+        elif index < self.active_map:
+            self.active_map -= 1
+        self._refresh_tabs()
+        self.statusBar().showMessage(f"Closed map “{name}”.")
+
+    def rename_map(self, index):
+        if not (0 <= index < len(self.maps)):
+            return
+        name, ok = QInputDialog.getText(
+            self, "Rename map", "Map name:", text=self.maps[index]["name"])
+        if ok and name.strip():
+            self.maps[index]["name"] = name.strip()
+            self._refresh_tabs()
+
     # ----- inspector dock
     def _dock_inspector(self, area):
         self.inspector_dock.setFloating(False)
@@ -725,11 +977,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Exported report → {path}")
 
     def new_map(self):
-        self.scene.clear_map()
+        self.maps = [{"name": "Map 1", "state": {"nodes": [], "edges": [], "ideas": []}}]
+        self.active_map = 0
         self.current_file = None
-        self.inspector.set_node(None)
-        self.ideas.load([])
-        self.statusBar().showMessage("New empty map.")
+        self._load_state(self.maps[0]["state"])
+        self._refresh_tabs()
+        self.view.fit_all()
+        self.statusBar().showMessage("New engagement — one empty map.")
 
     def open_map(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open mind map", "", "MindMapo (*.json)")
@@ -738,11 +992,37 @@ class MainWindow(QMainWindow):
         try:
             with open(path) as f:
                 data = json.load(f)
-            self.scene.from_dict(data)
-            self.ideas.load(data.get("ideas", []))
+            if isinstance(data, dict) and "maps" in data:      # multi-map file
+                self.maps = []
+                for entry in data["maps"]:
+                    self.maps.append({
+                        "name": entry.get("name", "Map"),
+                        "state": {
+                            "nodes": entry.get("nodes", []),
+                            "edges": entry.get("edges", []),
+                            "ideas": entry.get("ideas", []),
+                        },
+                    })
+                self.active_map = min(int(data.get("active", 0)), len(self.maps) - 1)
+            else:                                              # legacy single map
+                self.maps = [{
+                    "name": "Map 1",
+                    "state": {
+                        "nodes": data.get("nodes", []),
+                        "edges": data.get("edges", []),
+                        "ideas": data.get("ideas", []),
+                    },
+                }]
+                self.active_map = 0
+            if not self.maps:
+                self.maps = [{"name": "Map 1",
+                              "state": {"nodes": [], "edges": [], "ideas": []}}]
+                self.active_map = 0
+            self._load_state(self.maps[self.active_map]["state"])
+            self._refresh_tabs()
             self.current_file = path
             self.view.fit_all()
-            self.statusBar().showMessage(f"Opened {path}")
+            self.statusBar().showMessage(f"Opened {path} — {len(self.maps)} map(s).")
         except Exception as exc:  # noqa
             self.statusBar().showMessage(f"Failed to open: {exc}")
 
@@ -755,12 +1035,16 @@ class MainWindow(QMainWindow):
                 return
             if not path.endswith(".json"):
                 path += ".json"
-        data = self.scene.to_dict()
-        data["ideas"] = self.ideas.to_list()
+        self._capture_active()
+        doc = {"version": 2, "active": self.active_map, "maps": []}
+        for m in self.maps:
+            entry = dict(m["state"] or {"nodes": [], "edges": [], "ideas": []})
+            entry["name"] = m["name"]
+            doc["maps"].append(entry)
         with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(doc, f, indent=2)
         self.current_file = path
-        self.statusBar().showMessage(f"Saved {path}")
+        self.statusBar().showMessage(f"Saved {path} — {len(self.maps)} map(s).")
 
     # ------------------------------------------------------------------ glue
     def _sync_inspector(self):

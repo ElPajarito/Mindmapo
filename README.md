@@ -11,6 +11,11 @@ pops on hover — a Mario-world board for your kill chain.
 - **Pentest categories** out of the box — Target, Recon, Scanning, Enumeration,
   Vulnerability, Exploitation, Credentials, Priv Esc, Lateral Movement,
   Persistence, Exfiltration, Notes. Each has its own vivid color, emoji and glow.
+- **Multiple maps per asset (tabs).** Keep several mind maps for the same
+  engagement side-by-side — e.g. *External*, *Web app*, *AD / internal*. Tabs
+  live in a strip above the canvas: **➕ New map** to add, double-click to
+  rename, **✕** to close, and click the **🗂 ▾** header to collapse the whole
+  strip out of the way. All maps are saved/opened together in one file.
 - **Every fact is a node.** Add from the palette, or right-click a node →
   *Add child* to branch your findings.
 - **Living canvas** — bouncy spawn, idle float, hover pop, neon glow, and
@@ -54,6 +59,9 @@ The app opens with a small sample engagement so you can see it breathing.
 
 | Action | How |
 |---|---|
+| New map (tab) | **➕ New map** in the tab strip |
+| Rename / close map | Double-click a tab / click its **✕** |
+| Collapse tab strip | Click the **🗂 ▾** header at the left of the strip |
 | Add node | Click a category in the left palette |
 | Add child | Right-click a node → **Add child** |
 | Edit | Select a node, use the right **Inspector** (or double-click to rename) |
