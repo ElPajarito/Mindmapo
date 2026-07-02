@@ -4,7 +4,9 @@ import math
 import random
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QBrush, QLinearGradient, QFont, QImage
+from PySide6.QtGui import (
+    QColor, QPainter, QBrush, QLinearGradient, QFont, QImage, QGuiApplication,
+)
 from PySide6.QtWidgets import (
     QGraphicsScene, QGraphicsView, QMenu, QInputDialog, QGraphicsItem,
 )
@@ -32,6 +34,8 @@ class MindScene(QGraphicsScene):
         self.link_mode = False
         self._link_source = None
         self.simple_lod = False        # zoomed-out / low-detail rendering
+        self._fast = False             # active pan/drag: shed expensive effects
+        self.view_scale = 1.0          # current view zoom (drives node text sizing)
         self.search_query = ""
         self.lane_bands = []           # swimlane backgrounds (label, color, y0, y1)
 
@@ -43,19 +47,28 @@ class MindScene(QGraphicsScene):
             for _ in range(220)
         ]
 
-        # Drive the flowing-edge animation + subtle background drift.
+        # Drive the flowing-edge animation + subtle background drift at the
+        # display's refresh rate (so it's as smooth as the monitor allows),
+        # while keeping the motion *speed* constant regardless of that rate.
         self._phase = 0.0
+        hz = 60.0
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None and screen.refreshRate() > 1:
+            hz = screen.refreshRate()
+        self._tick_ms = max(6, int(round(1000.0 / hz)))     # e.g. 144 Hz -> 7 ms
+        self._phase_step = self._tick_ms / 40.0             # 40 ms tick == 1.0 (original speed)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(40)
+        self._timer.start(self._tick_ms)
 
     # ------------------------------------------------------------------ tick
     def _tick(self):
-        # At low LOD the flowing-edge + background drift animations are paused;
-        # this is the single biggest per-frame saving on a busy board.
-        if self.simple_lod:
+        # At low LOD (or while actively panning/dragging) the flowing-edge +
+        # background drift animations are paused; the single biggest per-frame
+        # saving on a busy board.
+        if self.simple_lod or self._fast:
             return
-        self._phase += 1.0
+        self._phase += self._phase_step
         for e in self.edges:
             if e.isVisible():
                 e.set_phase(self._phase)
@@ -359,6 +372,22 @@ class MindScene(QGraphicsScene):
         for e in self.edges:
             e.update()
 
+    def set_interaction_fast(self, on):
+        """While actively panning/dragging, drop the costly per-frame work:
+        the drop-shadow glow (re-blurred every repaint) and the idle float +
+        edge-flow animations. Restored to the current LOD/perf state on release.
+        """
+        if on == self._fast:
+            return
+        self._fast = on
+        if on:
+            for n in self.nodes:
+                n.set_glow_enabled(False)
+                n.pause_float()
+        else:
+            self._apply_node_effects()
+            self.update_performance_mode()
+
     def update_performance_mode(self):
         self._apply_node_effects()
         floats_ok = len(self.nodes) <= PERF_FLOAT_LIMIT and not self.simple_lod
@@ -382,7 +411,7 @@ class MindScene(QGraphicsScene):
             if not q:
                 n.dimmed = False
             else:
-                hay = f"{n.title} {n.notes} {get_category(n.category).label}".lower()
+                hay = f"{n.title} {n.plain_notes()} {get_category(n.category).label}".lower()
                 hit = q in hay
                 n.dimmed = not hit
                 if hit:
@@ -444,7 +473,9 @@ class MindScene(QGraphicsScene):
         painter = QPainter(img)
         painter.setRenderHint(QPainter.Antialiasing, True)
         self.clearSelection()
+        old_scale, self.view_scale = self.view_scale, 1.0   # natural-size node text
         self.render(painter, target=QRectF(0, 0, img.width(), img.height()), source=rect)
+        self.view_scale = old_scale
         painter.end()
         return img.save(path)
 
@@ -458,7 +489,7 @@ class MindScene(QGraphicsScene):
             lines.append("")
             for n in members:
                 lines.append(f"- **{n.title}**")
-                for ln in (n.notes or "").splitlines():
+                for ln in (n.plain_notes() or "").splitlines():
                     if ln.strip():
                         lines.append(f"    - {ln.strip()}")
                 links = [e.other(n).title for e in n.edges]
@@ -539,6 +570,17 @@ class MindView(QGraphicsView):
 
     def __init__(self, scene):
         super().__init__(scene)
+        # GPU-accelerated, vsync-synced viewport → tear-free frames presented at
+        # the monitor's native refresh rate (the "canvas app" feel). Falls back
+        # to the software raster viewport if OpenGL isn't available (e.g. the
+        # headless "offscreen" platform used for tests).
+        try:
+            from PySide6.QtWidgets import QApplication
+            if QApplication.platformName() != "offscreen":
+                from PySide6.QtOpenGLWidgets import QOpenGLWidget
+                self.setViewport(QOpenGLWidget())
+        except Exception:
+            pass
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform |
                             QPainter.TextAntialiasing)
         self.setDragMode(QGraphicsView.RubberBandDrag)
@@ -548,13 +590,17 @@ class MindView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._zoom = 1.0
         self._panning = False
+        self._pan_moved = False
+        self._suppress_menu = False
         self._pan_start = QPointF()
+        self._pan_rem = QPointF(0, 0)
         self.centerOn(0, 0)
         self.horizontalScrollBar().valueChanged.connect(self.viewport_changed)
         self.verticalScrollBar().valueChanged.connect(self.viewport_changed)
 
     def _after_view_change(self):
         self._zoom = self.transform().m11()
+        self.scene().view_scale = self._zoom
         self.scene().set_lod(self._zoom < LOD_THRESHOLD)
         self.viewport_changed.emit()
 
@@ -589,14 +635,22 @@ class MindView(QGraphicsView):
             self.centerOn(0, 0)
             self._after_view_change()
 
-    # ----- pan with middle mouse / space-less hand on empty space
+    # ----- pan: middle mouse, Alt+drag, or right-drag on empty canvas
     def mousePressEvent(self, event):
-        if event.button() == Qt.MiddleButton or (
-            event.button() == Qt.LeftButton and event.modifiers() & Qt.AltModifier
-        ):
+        want_pan = event.button() == Qt.MiddleButton or (
+            event.button() == Qt.LeftButton and event.modifiers() & Qt.AltModifier)
+        # A right-press on empty canvas grabs and drags the map. Right-clicking a
+        # node/edge (item present) still opens its context menu.
+        if (not want_pan and event.button() == Qt.RightButton
+                and self.itemAt(event.position().toPoint()) is None):
+            want_pan = True
+        if want_pan:
             self._panning = True
+            self._pan_moved = False
             self._pan_start = event.position()
+            self._pan_rem = QPointF(0, 0)
             self.setCursor(Qt.ClosedHandCursor)
+            self.scene().set_interaction_fast(True)
             event.accept()
             return
         super().mousePressEvent(event)
@@ -605,10 +659,16 @@ class MindView(QGraphicsView):
         if self._panning:
             delta = event.position() - self._pan_start
             self._pan_start = event.position()
-            self.horizontalScrollBar().setValue(
-                self.horizontalScrollBar().value() - int(delta.x()))
-            self.verticalScrollBar().setValue(
-                self.verticalScrollBar().value() - int(delta.y()))
+            if abs(delta.x()) + abs(delta.y()) > 2:
+                self._pan_moved = True
+            # Carry sub-pixel remainders across moves so the pan tracks the
+            # cursor exactly instead of drifting from repeated int() truncation.
+            dx = delta.x() + self._pan_rem.x()
+            dy = delta.y() + self._pan_rem.y()
+            ix, iy = int(dx), int(dy)
+            self._pan_rem = QPointF(dx - ix, dy - iy)
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - ix)
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - iy)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -617,6 +677,17 @@ class MindView(QGraphicsView):
         if self._panning:
             self._panning = False
             self.setCursor(Qt.ArrowCursor)
+            # Swallow the context menu that a right-drag would otherwise pop.
+            self._suppress_menu = (event.button() == Qt.RightButton and self._pan_moved)
+            self.scene().set_interaction_fast(False)
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        # Don't show a menu for the right-drag we just used to pan.
+        if getattr(self, "_suppress_menu", False):
+            self._suppress_menu = False
+            event.accept()
+            return
+        super().contextMenuEvent(event)

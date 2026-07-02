@@ -10,18 +10,25 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor, QPen, QBrush, QFont, QPainterPath, QLinearGradient, QFontMetrics,
+    QTextDocument,
 )
 from PySide6.QtWidgets import (
-    QGraphicsObject, QGraphicsDropShadowEffect, QStyle,
+    QGraphicsObject, QGraphicsDropShadowEffect, QStyle, QGraphicsItem,
 )
 
 from categories import get_category, THEME
+
+
+def _looks_like_html(s):
+    s = (s or "").lower()
+    return any(t in s for t in ("</", "<p", "<span", "<br", "<html", "<ul", "<ol", "<li"))
 
 
 MARGIN = 22          # painting headroom for glow / pop scale
 BLOCK_H = 62
 MIN_W = 150
 MAX_W = 300
+DRAG_THRESHOLD = 4   # scene units a press must travel before it counts as a drag
 
 
 class MindNode(QGraphicsObject):
@@ -40,6 +47,8 @@ class MindNode(QGraphicsObject):
         self._base = QPointF(pos)
         self._internal_move = False
         self._dragging = False
+        self._drag_active = False        # crossed the threshold -> fast render mode
+        self._press_pos = QPointF(0, 0)
         self._hover = False
         self.collapsed = False          # subtree folded into this node?
         self.hidden_count = 0           # descendants currently hidden under it
@@ -53,6 +62,12 @@ class MindNode(QGraphicsObject):
         self.setAcceptHoverEvents(True)
         self.setPos(self._base)
         self._recalc_width()
+
+        # Cache the rendered node (glow included) as a device-space pixmap: while
+        # it merely moves (float / drag / pan) the cached bitmap is re-blitted
+        # instead of re-blurring the drop-shadow every frame — the key to cheap
+        # frames at a high refresh rate. It re-renders only on zoom / edit.
+        self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
 
         # Neon glow that matches the category color.
         self._glow = QGraphicsDropShadowEffect()
@@ -210,9 +225,19 @@ class MindNode(QGraphicsObject):
 
         # Title — white text with a dark halo so it stays legible on ANY
         # category color (gold, teal, orange…) and over the busy glow/edges.
-        p.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        trect = QRectF(46, 26, self._w - 56, 30)
-        fm = QFontMetrics(p.font())
+        # The point size scales with the *view* zoom: as you zoom out the font
+        # grows (never below the base size) so titles stay readable, capped so
+        # they still fit the block; zoomed in it settles back to the base size.
+        zoom = getattr(self.scene(), "view_scale", 1.0) or 1.0
+        pt = 14.0 / (1.333 * max(zoom, 0.05))
+        pt = max(11.0, min(pt, 20.0))
+        title_font = QFont("Segoe UI")
+        title_font.setBold(True)
+        title_font.setPointSizeF(pt)
+        p.setFont(title_font)
+        fm = QFontMetrics(title_font)
+        th = fm.height()
+        trect = QRectF(46, 41 - th / 2, self._w - 56, th)
         elided = fm.elidedText(self._title, Qt.ElideRight, int(trect.width()))
         self._draw_outlined_text(p, trect, Qt.AlignVCenter | Qt.AlignLeft, elided)
 
@@ -280,15 +305,34 @@ class MindNode(QGraphicsObject):
 
     def mousePressEvent(self, e):
         self._dragging = True
-        self._float_anim.pause()
+        self._drag_active = False
+        self._press_pos = e.scenePos()
+        self.pause_float()
         self.setCursor(Qt.ClosedHandCursor)
         super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        # Only once the pointer has actually travelled do we treat this as a
+        # drag and shed the costly glow/animations — a plain click never blinks.
+        if self._dragging and not self._drag_active:
+            if (e.scenePos() - self._press_pos).manhattanLength() > DRAG_THRESHOLD:
+                self._drag_active = True
+                sc = self.scene()
+                if sc is not None:
+                    sc.set_interaction_fast(True)
+        super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e):
         self._dragging = False
         # Re-anchor float baseline to wherever we dropped it.
         self._base = QPointF(self.pos().x(), self.pos().y() - self._float)
-        self._float_anim.resume()
+        if self._drag_active:
+            self._drag_active = False
+            sc = self.scene()
+            if sc is not None:
+                sc.set_interaction_fast(False)      # restores glow + floats (incl. this node)
+        else:
+            self.resume_float()                     # plain click: undo the press-time pause
         self.setCursor(Qt.OpenHandCursor)
         self._pop_to(1.0, dur=160, curve=QEasingCurve.OutCubic)
         super().mouseReleaseEvent(e)
@@ -317,6 +361,20 @@ class MindNode(QGraphicsObject):
         e.accept()
 
     # ------------------------------------------------------------------ data
+    def plain_notes(self):
+        """Notes as plain text (notes may be stored as rich-text HTML)."""
+        src = self.notes or ""
+        if getattr(self, "_pn_src", None) == src:
+            return self._pn_cache
+        if _looks_like_html(src):
+            doc = QTextDocument()
+            doc.setHtml(src)
+            txt = doc.toPlainText()
+        else:
+            txt = src
+        self._pn_src, self._pn_cache = src, txt
+        return txt
+
     def to_dict(self):
         return {
             "id": self.node_id,

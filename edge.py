@@ -57,7 +57,10 @@ class Edge(QGraphicsObject):
         return stroker.createStroke(self._path())
 
     def paint(self, p, option, widget=None):
-        p.setRenderHint(p.RenderHint.Antialiasing, True)
+        # Leave QPainter antialiasing OFF: the multisampled GL viewport smooths
+        # the curve, and letting QPainter also antialias would double up into a
+        # faint halo around the line.
+        p.setRenderHint(p.RenderHint.Antialiasing, False)
         path = self._path()
 
         if self.source.dimmed or self.dest.dimmed:
@@ -77,12 +80,6 @@ class Edge(QGraphicsObject):
             hl = QColor("#ffffff") if self.isSelected() else QColor(255, 255, 255, 120)
             p.setPen(QPen(hl, 7 if self.isSelected() else 6, Qt.SolidLine, Qt.RoundCap))
             p.drawPath(path)
-
-        # Soft outer glow.
-        glow = QColor(c1)
-        glow.setAlpha(60)
-        p.setPen(QPen(glow, 9, Qt.SolidLine, Qt.RoundCap))
-        p.drawPath(path)
 
         # Core line.
         pen = QPen(grad, 3, Qt.SolidLine, Qt.RoundCap)

@@ -6,6 +6,8 @@ pops on hover — a Mario-world board for your kill chain.
 
 ![python](https://img.shields.io/badge/python-3.9%2B-blue) ![PySide6](https://img.shields.io/badge/Qt-PySide6-green)
 
+![MindMapo in action](assets/screenshot.png)
+
 ## Features
 
 - **Pentest categories** out of the box — Target, Recon, Scanning, Enumeration,
@@ -20,8 +22,10 @@ pops on hover — a Mario-world board for your kill chain.
   *Add child* to branch your findings.
 - **Living canvas** — bouncy spawn, idle float, hover pop, neon glow, and
   connections with a flowing "energy" pulse running between nodes.
-- **Inspector panel** — edit a node's title, switch category, and jot freeform
-  intel/notes (creds, ports, payloads…).
+- **Inspector panel** — edit a node's title, switch category, and jot intel in a
+  full **rich-text editor**: bold / italic / underline / strikethrough, text +
+  highlight colors, bullet & numbered lists, and a **code** style with live,
+  language-agnostic **syntax highlighting** for pasted commands/snippets.
 - **Link mode** — wire any two nodes together; remove links by selecting them,
   right-click → *Remove link*, or a node's *Unlink* submenu.
 - **Built for large engagements:**
@@ -38,7 +42,10 @@ pops on hover — a Mario-world board for your kill chain.
 - **Idea tracker** — a discreet, faded panel (top-right) for brainstorming things
   to throw at an asset. Collapses to a small `💡 Ideas` pill, tick items off as
   you try them, and it's saved/loaded with the map.
-- **Smooth zoom & pan**, fit-to-view, rubber-band multi-select.
+- **Zoom-aware node text** — titles auto-scale with the zoom level so they stay
+  legible when you pull back to see the whole board.
+- **Smooth zoom & pan** — **right-drag the empty canvas to pan** (like middle-drag),
+  fit-to-view, and left-drag for rubber-band multi-select.
 - **Save / Open** engagements as plain JSON.
 
 ## Install
@@ -76,8 +83,10 @@ The app opens with a small sample engagement so you can see it breathing.
 | Export | **Export** menu → PNG / Markdown |
 | Navigate big maps | Click/drag the **minimap** (bottom-right) |
 | Brainstorm ideas | **💡 Ideas** panel (top-right) — click to expand, `↵` to add, tick to check off |
+| Format notes | Toolbar above **Intel / Notes** — **B** / *I* / U / S, colors, `</>` code, lists (`Ctrl+B/I/U`) |
 | Zoom | Mouse wheel (zoom out far → simplified low-detail mode) |
-| Pan | Middle-drag, or **Alt + drag** |
+| Pan | **Right-drag empty canvas**, middle-drag, or **Alt + drag** |
+| Multi-select | **Left-drag** a rubber band on empty canvas |
 | Fit / reset | `Ctrl+0` / toolbar |
 | New / Open / Save | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` |
 
@@ -90,4 +99,6 @@ The app opens with a small sample engagement so you can see it breathing.
 | `node.py` | Animated `MindNode` block (LOD, collapse badge) |
 | `edge.py` | Curved, color-blended `Edge` with flowing pulse |
 | `minimap.py` | Floating overview navigator |
+| `rich_notes.py` | Rich-text Intel/Notes editor + code syntax highlighter |
+| `idea_tracker.py` | Discreet, collapsible brainstorm pad |
 | `categories.py` | Pentest categories + theme colors |

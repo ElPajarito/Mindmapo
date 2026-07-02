@@ -8,7 +8,7 @@ import json
 import sys
 
 from PySide6.QtCore import Qt, QPointF, Signal
-from PySide6.QtGui import QAction, QKeySequence, QFont, QColor
+from PySide6.QtGui import QAction, QKeySequence, QFont, QColor, QSurfaceFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QComboBox, QLineEdit, QPlainTextEdit,
@@ -21,6 +21,7 @@ from node import MindNode
 from scene import MindScene, MindView
 from minimap import Minimap
 from idea_tracker import IdeaTracker
+from rich_notes import RichNotesEditor
 
 
 def style_sheet():
@@ -219,6 +220,21 @@ def style_sheet():
     }}
     #TabAdd:hover, #TabCollapse:hover {{ background: #243056; color: {t['accent']}; }}
     #TabMini {{ color: {t['text_dim']}; font-weight: 800; padding: 0 8px; }}
+    QToolButton#fmtBtn {{
+        background: {t['panel_alt']}; border: 1px solid {t['border']};
+        border-radius: 7px; min-width: 22px; min-height: 22px;
+        padding: 2px 5px; font-weight: 800; color: {t['text']};
+    }}
+    QToolButton#fmtBtn:hover {{ background: #243056; color: {t['accent']}; }}
+    QToolButton#fmtBtn:checked {{
+        background: {t['accent']}; color: #221a00; border: 1px solid {t['accent']};
+    }}
+    QTextEdit#notesEdit {{
+        background: {t['panel_alt']}; border: 1px solid {t['border']};
+        border-radius: 10px; padding: 7px 9px; color: {t['text']};
+        selection-background-color: {t['accent']};
+    }}
+    QTextEdit#notesEdit:focus {{ border: 1px solid {t['accent']}; }}
     QLineEdit, QPlainTextEdit, QComboBox {{
         background: {t['panel_alt']};
         border: 1px solid {t['border']};
@@ -313,10 +329,9 @@ class Inspector(QFrame):
         self.cat_combo.currentIndexChanged.connect(self._on_category)
         self.g_cat = self._group("CATEGORY", self.cat_combo)
 
-        self.notes_edit = QPlainTextEdit()
-        self.notes_edit.setPlaceholderText("Creds, ports, payloads, observations…")
-        self.notes_edit.textChanged.connect(self._on_notes)
-        self.g_notes = self._group("INTEL / NOTES", self.notes_edit)
+        self.notes_editor = RichNotesEditor()
+        self.notes_editor.changed.connect(self._on_notes)
+        self.g_notes = self._group("INTEL / NOTES", self.notes_editor)
 
         self.del_btn = QPushButton("\U0001F5D1  Delete node")
         self.del_btn.setObjectName("danger")
@@ -371,17 +386,17 @@ class Inspector(QFrame):
         self._busy = True
         self.node = node
         enabled = node is not None
-        for w in (self.title_edit, self.cat_combo, self.notes_edit, self.del_btn):
+        for w in (self.title_edit, self.cat_combo, self.notes_editor, self.del_btn):
             w.setEnabled(enabled)
         if node is None:
             self.title_lbl.setText("No node selected")
             self.title_edit.clear()
-            self.notes_edit.setPlainText("")
+            self.notes_editor.set_html("")
         else:
             cat = get_category(node.category)
             self.title_lbl.setText(f"{cat.emoji}  {node.title}")
             self.title_edit.setText(node.title)
-            self.notes_edit.setPlainText(node.notes)
+            self.notes_editor.set_html(node.notes)
             idx = self.cat_combo.findData(node.category)
             if idx >= 0:
                 self.cat_combo.setCurrentIndex(idx)
@@ -404,7 +419,9 @@ class Inspector(QFrame):
     def _on_notes(self):
         if self._busy or not self.node:
             return
-        self.node.notes = self.notes_edit.toPlainText()
+        ed = self.notes_editor
+        # Store nothing (not an empty HTML doc) when there's no actual text.
+        self.node.notes = ed.to_html() if ed.plain_text().strip() else ""
 
     def _delete(self):
         if self.node:
@@ -1101,6 +1118,15 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # Multisampling (smooth line/curve edges on the GL viewport) + vsync (frames
+    # present at the display's refresh rate). Directly-drawn primitives such as
+    # edges leave QPainter antialiasing OFF so MSAA is the single AA source — no
+    # double-antialiasing halo.
+    fmt = QSurfaceFormat()
+    fmt.setSamples(4)
+    fmt.setSwapInterval(1)          # 1 = vsync
+    QSurfaceFormat.setDefaultFormat(fmt)
+
     app = QApplication(sys.argv)
     app.setApplicationName("MindMapo")
     app.setFont(QFont("Segoe UI", 10))
