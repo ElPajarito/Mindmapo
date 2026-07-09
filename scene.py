@@ -122,6 +122,7 @@ class MindScene(QGraphicsScene):
             self.remove_edge(e)
         if node in self.nodes:
             self.nodes.remove(node)
+        node.teardown()                 # release GL-bound effect/cache + anims first
         self.removeItem(node)
         self.refresh_visibility()
         self.update_performance_mode()
@@ -145,9 +146,19 @@ class MindScene(QGraphicsScene):
                 self.status_message.emit("Link removed.")
 
     def clear_map(self):
+        # Bulk teardown: release each node's GL-bound effect/cache + stop its
+        # animations *before* removing it, and skip the per-node visibility /
+        # perf / selection churn (and its re-entrancy) that delete_node does.
+        self._link_source = None
         for n in list(self.nodes):
-            self.delete_node(n)
+            for e in list(n.edges):
+                self.remove_edge(e)
+            self.nodes.remove(n)
+            n.teardown()
+            self.removeItem(n)
+        self.lane_bands = []
         self._id_counter = 0
+        self.update_performance_mode()
 
     # ------------------------------------------------------------------ menus
     def request_rename(self, node):

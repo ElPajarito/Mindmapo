@@ -13,7 +13,7 @@ from PySide6.QtGui import (
     QTextDocument,
 )
 from PySide6.QtWidgets import (
-    QGraphicsObject, QGraphicsDropShadowEffect, QStyle, QGraphicsItem,
+    QGraphicsObject, QStyle, QGraphicsItem,
 )
 
 from categories import get_category, THEME
@@ -24,7 +24,7 @@ def _looks_like_html(s):
     return any(t in s for t in ("</", "<p", "<span", "<br", "<html", "<ul", "<ol", "<li"))
 
 
-MARGIN = 22          # painting headroom for glow / pop scale
+MARGIN = 26          # painting headroom for glow / pop scale
 BLOCK_H = 62
 MIN_W = 150
 MAX_W = 300
@@ -65,16 +65,17 @@ class MindNode(QGraphicsObject):
 
         # Cache the rendered node (glow included) as a device-space pixmap: while
         # it merely moves (float / drag / pan) the cached bitmap is re-blitted
-        # instead of re-blurring the drop-shadow every frame — the key to cheap
-        # frames at a high refresh rate. It re-renders only on zoom / edit.
+        # instead of re-painting the glow every frame — the key to cheap frames
+        # at a high refresh rate. It re-renders only on zoom / edit.
         self.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
 
-        # Neon glow that matches the category color.
-        self._glow = QGraphicsDropShadowEffect()
-        self._glow.setBlurRadius(34)
-        self._glow.setOffset(0, 6)
-        self._refresh_glow()
-        self.setGraphicsEffect(self._glow)
+        # Neon glow. It is painted by hand in paint() (a soft category-colored
+        # halo) rather than via QGraphicsDropShadowEffect: that effect crashes
+        # inside Qt's paint traversal (QGraphicsItemPrivate::effectiveBoundingRect)
+        # on this Qt/driver combo when the scene is mutated live — e.g. adding a
+        # node or clearing a filled map to open a new tab. Hand-painting is
+        # stable and, thanks to the device cache above, just as cheap.
+        self._glow_on = True
 
         # Animations -------------------------------------------------------
         self._pop = QPropertyAnimation(self, b"scale", self)
@@ -142,12 +143,13 @@ class MindNode(QGraphicsObject):
 
     # ------------------------------------------------------------------ glow
     def _refresh_glow(self):
-        c = QColor(get_category(self.category).color)
-        c.setAlpha(170)
-        self._glow.setColor(c)
+        # Glow color is read from the category at paint time; just repaint.
+        self.update()
 
     def set_glow_enabled(self, on):
-        self._glow.setEnabled(on)
+        if on != self._glow_on:
+            self._glow_on = on
+            self.update()
 
     def pause_float(self):
         if self._float_anim.state() == QPropertyAnimation.Running:
@@ -156,6 +158,17 @@ class MindNode(QGraphicsObject):
     def resume_float(self):
         if self._float_anim.state() == QPropertyAnimation.Paused:
             self._float_anim.resume()
+
+    def teardown(self):
+        """Release timers / device cache before the node leaves the scene.
+
+        Stops the never-ending float animation so nothing repaints the item
+        after removal, and drops the DeviceCoordinateCache pixmap (bound to the
+        viewport) so it isn't freed later against a live GL context.
+        """
+        for anim in (self._pop, self._float_anim):
+            anim.stop()
+        self.setCacheMode(QGraphicsItem.NoCache)
 
     def _lod_simple(self):
         sc = self.scene()
@@ -172,6 +185,12 @@ class MindNode(QGraphicsObject):
             p.setOpacity(0.18)
 
         selected = bool(option.state & QStyle.State_Selected)
+
+        # Neon glow — a soft category-colored halo painted as a few expanding,
+        # fading rounded outlines just below the block (replaces the crash-prone
+        # QGraphicsDropShadowEffect). Skipped while dimmed or at low LOD.
+        if self._glow_on and not self.dimmed and not self._lod_simple():
+            self._paint_glow(p, base)
 
         # Glossy vertical gradient.
         grad = QLinearGradient(0, 0, 0, BLOCK_H)
@@ -243,6 +262,21 @@ class MindNode(QGraphicsObject):
 
         if self.collapsed and self.hidden_count:
             self._draw_collapse_badge(p)
+
+    def _paint_glow(self, p, base):
+        """Soft neon halo: concentric fading rounded fills around the block,
+        nudged down a touch to read like a light source from above."""
+        p.setPen(Qt.NoPen)
+        rect = self.block_rect().translated(0, 5)
+        layers = 6
+        for i in range(layers, 0, -1):
+            grow = i * 3.0                       # outermost ring ~18px out (< MARGIN)
+            col = QColor(base)
+            col.setAlpha(int(10 + 42 * (1 - (i - 1) / (layers - 1))))
+            halo = QPainterPath()
+            halo.addRoundedRect(rect.adjusted(-grow, -grow, grow, grow),
+                                16 + grow * 0.5, 16 + grow * 0.5)
+            p.fillPath(halo, col)
 
     def _draw_collapse_badge(self, p):
         """A '+N' bubble on the bottom-right showing hidden descendants."""
